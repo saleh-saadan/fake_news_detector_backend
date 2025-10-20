@@ -45,7 +45,7 @@ ${text}`;
       return parsed.claims.filter(c => c && c.length > 10).slice(0, 4);
     }
   } catch (e) {
-    console.error('LLM claim extraction failed:', e);
+    console.error('LLM claim extraction failed:', e.message);
   }
   
   // Fallback to basic extraction
@@ -170,7 +170,7 @@ ${text}`;
       };
     }
   } catch (e) {
-    console.error('AI detection failed:', e);
+    console.error('AI detection failed:', e.message);
   }
   
   // Fallback - analyze basic patterns
@@ -265,7 +265,7 @@ app.post('/api/analyze-news', async (req, res) => {
     try {
       factCheckResponse = await callOpenRouterChat(messages, 1500);
     } catch (llmErr) {
-      console.error('LLM error:', llmErr);
+      console.error('LLM error:', llmErr.message);
       return res.status(502).json({ 
         error: 'LLM service unavailable',
         details: llmErr.message 
