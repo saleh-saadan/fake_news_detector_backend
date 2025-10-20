@@ -17,7 +17,7 @@ class FakeNewsDetector:
         # Trusted source indicators
         self.trusted_sources = [
             'bbc', 'reuters', 'ap news', 'associated press', 'npr', 'pbs',
-            'wall street journal', 'new york times', 'washington post', 'the guardian'
+            'wall street journal', 'new york times', 'washi1ngton post', 'the guardian'
         ]
     
     def analyze_emotional_language(self, text):

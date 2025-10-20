@@ -1,14 +1,17 @@
 // backend/llm.js
 const axios = require('axios');
+require('dotenv').config();
 
 const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openai/gpt-4o'; // change if needed
 if (!OPENROUTER_KEY) {
   console.warn('Warning: OPENROUTER_API_KEY not set. LLM calls will fail.');
 }
-
-async function callOpenRouterChat(messages, max_tokens = 1000) {
+console.log('API KEY:', process.env.OPENROUTER_API_KEY ? 'LOADED' : 'MISSING');
+  console.log("model", OPENROUTER_MODEL)
+async function callOpenRouterChat(messages,  max_tokens = 1000) {
   if (!OPENROUTER_KEY) throw new Error('OPENROUTER_API_KEY missing');
+
   const url = 'https://openrouter.ai/api/v1/chat/completions';
   const payload = {
     model: OPENROUTER_MODEL,
