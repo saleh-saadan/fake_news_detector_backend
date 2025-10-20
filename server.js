@@ -265,7 +265,7 @@ app.post('/api/analyze-news', async (req, res) => {
     try {
       factCheckResponse = await callOpenRouterChat(messages, 1500);
     } catch (llmErr) {
-      console.error('LLM error:', llmErr.message);
+      console.error('LLM error:', llmErr);
       return res.status(502).json({ 
         error: 'LLM service unavailable',
         details: llmErr.message 
