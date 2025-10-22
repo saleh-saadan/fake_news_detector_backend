@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const { retrieveEvidence } = require('./retriever');
 const { callOpenRouterChat, extractJsonFromText } = require('./llm');
+const { detectAIWithGPTZero, detectAIFallback } = require('./ai-detector');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -20,7 +21,7 @@ const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 const upload = multer({ dest: uploadDir, limits: { fileSize: 200 * 1024 * 1024 } });
 
-// IMPROVED: Better claim extraction using LLM
+// Extract claims using LLM
 async function extractClaimsWithLLM(text) {
   const prompt = `Extract 2-4 specific, verifiable factual claims from this text. Return ONLY valid JSON:
 {"claims": ["claim 1", "claim 2", ...]}
@@ -58,7 +59,7 @@ ${text}`;
   return sentences.slice(0, 3);
 }
 
-// IMPROVED: More sophisticated prompt with better instructions
+// Build fact-checking prompt
 function buildAnalysisPrompt(fullText, claimsAndEvidence) {
   const systemPrompt = `You are a professional fact-checker. Analyze claims based on provided evidence and return STRICT JSON only.
 
@@ -105,132 +106,7 @@ Return JSON format:
   return { systemPrompt, userPrompt };
 }
 
-// IMPROVED: AI detection with MUCH better prompt and scoring system
-async function detectAIContent(text) {
-  const prompt = `You are an expert at detecting AI-generated text. Analyze this text and assign a score from 0-100:
-
-**SCORING GUIDE (be specific and varied):**
-- **0-20**: Clearly human (typos, informal, personal anecdotes, emotional, imperfect grammar, slang, first-person storytelling)
-- **21-40**: Probably human (natural flow, some informality, minor errors, human-like structure)
-- **41-60**: Uncertain (could be either - mixed signals)
-- **61-80**: Probably AI (formal, structured, polished, generic phrasing, lacks personality)
-- **81-100**: Clearly AI (perfect grammar, repetitive structure, overly formal, generic transitions like "Furthermore", "Moreover", lacks any personal touch)
-
-**AI INDICATORS (increase score):**
-- Perfect grammar and punctuation throughout
-- Repetitive sentence structures (e.g., all sentences same length)
-- Generic phrases: "delve into", "it's important to note", "in conclusion", "furthermore", "moreover"
-- Overly balanced/diplomatic tone (no strong opinions)
-- Lists and bullet points for everything
-- Academic formality in casual context
-- Lacks contractions (says "cannot" instead of "can't")
-- No typos, no informal language whatsoever
-
-**HUMAN INDICATORS (decrease score):**
-- Typos, grammatical errors, punctuation mistakes
-- Informal language, slang, contractions
-- Personal experiences ("I remember when...", "My friend told me...")
-- Emotional language (excitement, frustration, humor)
-- Stream-of-consciousness or rambling
-- Inconsistent formatting or structure
-- Abbreviations (like "bruh", "lol", "idk")
-- Direct address to reader in casual way
-- Incomplete sentences or thoughts
-
-**IMPORTANT:** Don't default to 70%! Be decisive. Most texts are clearly one or the other.
-
-Return ONLY valid JSON:
-{
-  "aiConfidence": <number 0-100>,
-  "aiExplanation": "<1 sentence explaining the score>",
-  "keyIndicators": ["<indicator 1>", "<indicator 2>", "<indicator 3>"]
-}
-
-TEXT TO ANALYZE:
-${text}`;
-
-  const messages = [
-    { role: 'system', content: 'You are a decisive AI content detector. You give varied scores from 0-100, not just 70.' },
-    { role: 'user', content: prompt }
-  ];
-
-  try {
-    const response = await callOpenRouterChat(messages, 350);
-    const parsed = extractJsonFromText(response);
-    
-    if (parsed && typeof parsed.aiConfidence === 'number') {
-      const confidence = Math.max(0, Math.min(100, parsed.aiConfidence)); // Clamp 0-100
-      const isAIWritten = confidence >= 60;
-      
-      return {
-        isAIWritten,
-        aiConfidence: confidence,
-        aiExplanation: parsed.aiExplanation || 'Analysis completed',
-        keyIndicators: parsed.keyIndicators || []
-      };
-    }
-  } catch (e) {
-    console.error('AI detection failed:', e.message);
-  }
-  
-  // Fallback - analyze basic patterns
-  return analyzeTextPatterns(text);
-}
-
-// Fallback heuristic analyzer if LLM fails
-function analyzeTextPatterns(text) {
-  let score = 50; // Start neutral
-  
-  // AI indicators (increase score)
-  const aiPhrases = ['furthermore', 'moreover', 'it is important to note', 'in conclusion', 'delve into', 'comprehensive', 'leverage', 'utilize'];
-  const foundAiPhrases = aiPhrases.filter(phrase => text.toLowerCase().includes(phrase));
-  score += foundAiPhrases.length * 8;
-  
-  // Check for perfect grammar (no typos)
-  const hasTypos = /\b(teh|recieve|occured|thier|definately|seperate)\b/i.test(text);
-  if (!hasTypos && text.length > 100) score += 10;
-  
-  // Check for contractions (humans use them more)
-  const contractions = (text.match(/\b(can't|don't|won't|isn't|aren't|wasn't|weren't|haven't|hasn't|wouldn't|couldn't|shouldn't)\b/gi) || []).length;
-  const words = text.split(/\s+/).length;
-  const contractionRate = contractions / words;
-  if (contractionRate < 0.01 && words > 50) score += 15; // Very few contractions = AI-like
-  
-  // Human indicators (decrease score)
-  const humanPhrases = ['lol', 'lmao', 'bruh', 'tbh', 'idk', 'omg', 'wtf', 'ngl'];
-  const foundHumanPhrases = humanPhrases.filter(phrase => text.toLowerCase().includes(phrase));
-  score -= foundHumanPhrases.length * 12;
-  
-  // Check for emotional punctuation
-  const exclamations = (text.match(/!/g) || []).length;
-  const questions = (text.match(/\?/g) || []).length;
-  if (exclamations + questions > 3) score -= 10;
-  
-  // Check for personal pronouns
-  const personalPronouns = (text.match(/\b(I|me|my|mine|myself)\b/g) || []).length;
-  if (personalPronouns > 3) score -= 15;
-  
-  // Clamp score
-  score = Math.max(0, Math.min(100, score));
-  
-  let explanation = '';
-  if (score >= 70) {
-    explanation = 'Text shows formal structure and polished language typical of AI generation';
-  } else if (score >= 40) {
-    explanation = 'Mixed signals - text has both human and AI-like characteristics';
-  } else {
-    explanation = 'Text contains informal language and personal elements typical of human writing';
-  }
-  
-  return {
-    isAIWritten: score >= 60,
-    aiConfidence: score,
-    aiExplanation: explanation,
-    keyIndicators: []
-  };
-}
-
-// MAIN ROUTE: Analyze news with improved logic
+// MAIN ROUTE: Analyze news
 app.post('/api/analyze-news', async (req, res) => {
   try {
     const text = (req.body.text || '').trim();
@@ -281,9 +157,16 @@ app.post('/api/analyze-news', async (req, res) => {
       });
     }
 
-    // Step 4: AI detection
+    // Step 4: AI detection with GPTZero (primary) or fallback
     console.log('Detecting AI authorship...');
-    const aiDetection = await detectAIContent(text);
+    let aiDetection;
+    try {
+      aiDetection = await detectAIWithGPTZero(text);
+      console.log('✅ Used GPTZero for AI detection');
+    } catch (e) {
+      console.log('⚠️ GPTZero unavailable, using fallback detector');
+      aiDetection = await detectAIFallback(text);
+    }
 
     // Step 5: Combine results
     const finalResult = {
@@ -292,7 +175,8 @@ app.post('/api/analyze-news', async (req, res) => {
       overallAssessment: factCheckResult.overallAssessment || '',
       isAIWritten: aiDetection.isAIWritten,
       aiConfidence: aiDetection.aiConfidence,
-      aiExplanation: aiDetection.aiExplanation
+      aiExplanation: aiDetection.aiExplanation,
+      detectionMethod: aiDetection.method || 'unknown'
     };
 
     console.log('=== Analysis Complete ===\n');
@@ -304,13 +188,19 @@ app.post('/api/analyze-news', async (req, res) => {
   }
 });
 
-// Standalone AI detection endpoint (optional)
+// Standalone AI detection endpoint
 app.post('/api/detect-ai', async (req, res) => {
   try {
     const text = (req.body.text || '').trim();
     if (!text) return res.status(400).json({ error: 'Text required' });
 
-    const result = await detectAIContent(text);
+    let result;
+    try {
+      result = await detectAIWithGPTZero(text);
+    } catch (e) {
+      result = await detectAIFallback(text);
+    }
+    
     return res.json(result);
   } catch (e) {
     console.error('AI detection error:', e);
