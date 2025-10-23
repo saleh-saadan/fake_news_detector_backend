@@ -21,7 +21,16 @@ const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 const upload = multer({ dest: uploadDir, limits: { fileSize: 200 * 1024 * 1024 } });
 
+
 async function extractClaimsWithLLM(text) {
+  // quick guard
+  text = (text || '').trim();
+  if (!text || text.length < 20) {
+    console.log('[ClaimsExtractor] input too short for LLM, using tiny fallback');
+  
+    return text ? [text.slice(0, 400)] : [];
+  }
+
   const prompt = `Extract 2-4 specific, verifiable factual claims from this text. Return ONLY valid JSON:
 {"claims": ["claim 1", "claim 2", ...]}
 
@@ -39,24 +48,61 @@ ${text}`;
       { role: 'system', content: 'You extract factual claims as JSON.' },
       { role: 'user', content: prompt }
     ];
-    const response = await callOpenRouterChat(messages, 300);
+
+    const response = await callOpenRouterChat(messages, 400);
+    console.log('[ClaimsExtractor] raw LLM response:', String(response).slice(0, 1200));
+
     const parsed = extractJsonFromText(response);
-    if (parsed && Array.isArray(parsed.claims)) {
-      return parsed.claims.filter(c => c && c.length > 10).slice(0, 4);
+    if (parsed && Array.isArray(parsed.claims) && parsed.claims.length) {
+      // normalize and trim
+      const cleaned = parsed.claims
+        .map(c => (c || '').replace(/\s+/g, ' ').trim())
+        .filter(Boolean)
+        .slice(0, 4);
+      if (cleaned.length) {
+        console.log('[ClaimsExtractor] got claims from LLM:', cleaned);
+        return cleaned;
+      }
     }
-  } catch (e) {
-    console.error('LLM claim extraction failed:', e.message);
+
+    console.log('[ClaimsExtractor] LLM returned no usable JSON claims; falling back to heuristic extraction');
+  } catch (err) {
+    console.error('[ClaimsExtractor] LLM call error:', err && (err.message || err.toString()));
   }
-  
+
 
   const sentences = text
-    .replace(/\n/g, ' ')
-    .split(/(?<=[\.\?\!])\s+/)
+    .replace(/\n+/g, ' ')
+    .split(/(?<=[.?!])\s+/)
     .map(s => s.trim())
     .filter(s => s.length > 20);
-  
-  return sentences.slice(0, 3);
+
+  const facts = [];
+  const factyWords = /\b(Inc|Ltd|Corp|Company|University|said|announced|acquired|acquisition|acquires|acquired|bought|sold|deal|agreement|%|\d{4}|\d+)\b/i;
+
+  for (const s of sentences) {
+    if (facts.length >= 4) break;
+    
+    if (factyWords.test(s) || /[A-Z][a-z]{2,}\s[A-Z][a-z]{2,}/.test(s)) {
+      facts.push(s.replace(/\s+/g, ' ').trim());
+    }
+  }
+
+  if (facts.length === 0) {
+    const fallback = sentences
+      .sort((a, b) => b.length - a.length)
+      .slice(0, 3)
+      .map(s => s.replace(/\s+/g, ' ').trim());
+    if (fallback.length) {
+      console.log('[ClaimsExtractor] fallback long-sentences used:', fallback);
+      return fallback;
+    }
+  }
+
+  console.log('[ClaimsExtractor] heuristic claims:', facts);
+  return facts;
 }
+
 
 
 function buildAnalysisPrompt(fullText, claimsAndEvidence) {
