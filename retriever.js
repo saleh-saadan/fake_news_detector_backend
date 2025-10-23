@@ -1,8 +1,7 @@
-// backend/retriever.js
-// ACTUAL WORKING retriever using proper services
+
 const axios = require('axios');
 
-/** --- Helper Functions --- **/
+
 function mkEvidenceItem(title, url, snippet, source) {
   return {
     title: (title || 'Untitled').slice(0, 200),
@@ -20,8 +19,6 @@ function cleanText(text) {
     .trim();
 }
 
-/** --- 1. Serper.dev (BEST - 2500 free searches/month) --- **/
-// Sign up: https://serper.dev/ (no credit card)
 async function serperSearch(query, limit = 10) {
   const SERPER_KEY = process.env.SERPER_API_KEY || '';
   if (!SERPER_KEY) return [];
@@ -76,8 +73,7 @@ async function serperSearch(query, limit = 10) {
   }
 }
 
-/** --- 2. ValueSerp (Backup - 100 free searches/month) --- **/
-// Sign up: https://www.valueserp.com/
+
 async function valueSerpSearch(query, limit = 10) {
   const VALUESERP_KEY = process.env.VALUESERP_API_KEY || '';
   if (!VALUESERP_KEY) return [];
@@ -118,8 +114,6 @@ async function valueSerpSearch(query, limit = 10) {
   }
 }
 
-/** --- 3. Tavily AI (NEW - Built for AI, 1000 free/month) --- **/
-// Sign up: https://tavily.com/
 async function tavilySearch(query, limit = 10) {
   const TAVILY_KEY = process.env.TAVILY_API_KEY || '';
   if (!TAVILY_KEY) return [];
@@ -159,8 +153,6 @@ async function tavilySearch(query, limit = 10) {
   }
 }
 
-/** --- 4. You.com Search API (1000 free/month) --- **/
-// Sign up: https://api.you.com/
 async function youComSearch(query, limit = 10) {
   const YOU_API_KEY = process.env.YOU_API_KEY || '';
   if (!YOU_API_KEY) return [];
@@ -199,8 +191,7 @@ async function youComSearch(query, limit = 10) {
   }
 }
 
-/** --- 5. Exa.ai (Designed for LLM research, 1000 free/month) --- **/
-// Sign up: https://exa.ai/
+
 async function exaSearch(query, limit = 10) {
   const EXA_API_KEY = process.env.EXA_API_KEY || '';
   if (!EXA_API_KEY) return [];
@@ -242,7 +233,7 @@ async function exaSearch(query, limit = 10) {
   }
 }
 
-/** --- 6. Wikipedia (Last Resort) --- **/
+
 async function wikiSearchSnippets(query, limit = 3) {
   try {
     console.log('[Wikipedia] Searching...');
@@ -295,7 +286,7 @@ async function wikiSearchSnippets(query, limit = 3) {
   }
 }
 
-/** --- Main Retriever Function --- **/
+
 async function retrieveEvidence(claim) {
   if (!claim || typeof claim !== 'string' || claim.trim().length < 5) {
     return [];

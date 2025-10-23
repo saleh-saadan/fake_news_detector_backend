@@ -1,130 +1,361 @@
-# deepfake_detector_improved.py
-import sys, json, os, math, statistics
-import cv2, numpy as np
-import face_recognition
-import mediapipe as mp
 
-mp_face = mp.solutions.face_mesh
+import sys, json, os, math
+import cv2
+import numpy as np
 
-def get_frames(video_path, max_frames=120, resize=(320,320)):
+def get_frames(video_path, max_frames=80):
+    """Extract frames evenly from video"""
     cap = cv2.VideoCapture(video_path)
-    frames=[]
-    i=0
-    while i < max_frames:
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    
+    if total <= max_frames:
+        indices = range(total)
+    else:
+        indices = np.linspace(0, total-1, max_frames, dtype=int)
+    
+    frames = []
+    for idx in indices:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
         ret, frame = cap.read()
-        if not ret:
-            break
-        if resize:
-            frame = cv2.resize(frame, resize)
-        frames.append(frame)
-        i+=1
+        if ret:
+            frames.append(frame)
+    
     cap.release()
-    return frames
+    return frames, fps
 
-def face_crops_from_frame(frame):
-    # use face_recognition to get boxes (top, right, bottom, left)
-    rgb = frame[:,:,::-1]
-    boxes = face_recognition.face_locations(rgb, model='hog')  # faster; use 'cnn' if GPU and dlib installed
-    crops=[]
-    for (top, right, bottom, left) in boxes:
-        crop = frame[top:bottom, left:right]
-        if crop.size == 0: continue
-        crops.append(((top,right,bottom,left), crop))
+def detect_faces_haar(frame):
+    """Detect faces using OpenCV's Haar Cascade (built-in)"""
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+    
+    crops = []
+    h, w = frame.shape[:2]
+    
+    for (x, y, fw, fh) in faces:
+ 
+        pad = int(fw * 0.2)
+        x1 = max(0, x - pad)
+        y1 = max(0, y - pad)
+        x2 = min(w, x + fw + pad)
+        y2 = min(h, y + fh + pad)
+        
+        crop = frame[y1:y2, x1:x2]
+        if crop.size > 0:
+            crops.append((crop, (x1, y1, x2, y2)))
+    
     return crops
 
-def compute_face_embedding(crop):
-    rgb = crop[:,:,::-1]
-    enc = face_recognition.face_encodings(rgb)
-    if enc:
-        return enc[0]
-    return None
 
-def blink_rate(frames):
-    # use mediapipe landmarks to estimate eye aspect ratio changes
-    with mp_face.FaceMesh(static_image_mode=False, max_num_faces=1) as fm:
-        blink_counts=0
-        ratios=[]
-        for f in frames:
-            img = cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
-            res = fm.process(img)
-            if not res.multi_face_landmarks: continue
-            lm = res.multi_face_landmarks[0].landmark
-            h,w = f.shape[:2]
-            # eyelid landmarks indices (approx) - left eye sample
-            # choose a few landmarks for top/bottom
-            # compute simple vertical distance normalized by face height
-            ys = [lm[i].y for i in range(len(lm))]
-            ratios.append(np.std(ys))
-        if len(ratios) < 2: return 0.0
-        return float(np.mean(ratios))*1000.0  # scaled
-
-def laplacian_var_gray(img):
-    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    return cv2.Laplacian(g, cv2.CV_64F).var()
-
-def embedding_variance(embs):
-    embs = [e for e in embs if e is not None]
-    if len(embs) < 2: return 1.0
-    # compute pairwise distances
-    dists=[]
-    for i in range(1,len(embs)):
-        dists.append(np.linalg.norm(embs[i]-embs[0]))
-    return float(np.mean(dists))
-
-def dummy_cnn_score(crop):
-    # placeholder: you should replace with a real CNN prediction
-    # we use Laplacian var normalized: more blur -> higher suspicion
-    lv = laplacian_var_gray(crop)
-    # map lv (low) -> suspicious higher score
-    score = max(0, min(1.0, (200.0 - lv) / 200.0))
+def analyze_color_stability(frames):
+    """Check if face colors remain consistent over time"""
+    color_features = []
+    
+    for frame in frames[:40]:
+        faces = detect_faces_haar(frame)
+        if not faces:
+            continue
+        
+        crop, _ = faces[0]
+     
+        b_mean, g_mean, r_mean = [np.mean(crop[:,:,i]) for i in range(3)]
+        b_std, g_std, r_std = [np.std(crop[:,:,i]) for i in range(3)]
+        
+        color_features.append([b_mean, g_mean, r_mean, b_std, g_std, r_std])
+    
+    if len(color_features) < 5:
+        return 0.5
+    
+    features = np.array(color_features)
+    
+ 
+    temporal_variance = np.mean([np.std(features[:, i]) for i in range(6)])
+    
+  
+    score = min(1.0, max(0.0, (temporal_variance - 5) / 10))
     return score
 
-def aggregate(frames):
-    # per-face embedding stability, cnn scores, blink proxy
-    embeddings=[]
-    cnn_scores=[]
-    blur_scores=[]
-    face_count = 0
-    for f in frames:
-        crops = face_crops_from_frame(f)
-        if not crops: continue
-        face_count += len(crops)
-        # for demo, pick first face
-        box, crop = crops[0]
-        emb = compute_face_embedding(crop)
-        embeddings.append(emb)
-        cnn_scores.append(dummy_cnn_score(crop))
-        blur_scores.append(laplacian_var_gray(crop))
-    emb_var = embedding_variance(embeddings)
-    cnn_mean = float(np.mean(cnn_scores)) if cnn_scores else 0.5
-    blur_mean = float(np.mean(blur_scores)) if blur_scores else 1000.0
-    blink_proxy = blink_rate(frames)
-    # weights tuned by heuristics
-    # higher emb_var -> suspicious, higher cnn_mean -> suspicious, blink_proxy low->suspicious
-    s_emb = min(1.0, emb_var / 0.6)  # tune
-    s_cnn = cnn_mean
-    s_blink = 1.0 if blink_proxy < 0.03 else 0.0  # placeholder
-    combined = 0.45*s_emb + 0.35*s_cnn + 0.2*s_blink
-    prob = float(max(0.0, min(1.0, combined)))
-    return prob*100.0, {
-        "emb_var": s_emb,
-        "cnn_mean": s_cnn,
-        "blink_proxy": blink_proxy,
-        "face_samples": face_count
+
+def analyze_motion_consistency(frames):
+    """Detect unnatural motion patterns"""
+    if len(frames) < 6:
+        return 0.5
+    
+    flow_magnitudes = []
+    prev_gray = cv2.cvtColor(frames[0], cv2.COLOR_BGR2GRAY)
+    
+    for i in range(1, min(len(frames), 30)):
+        gray = cv2.cvtColor(frames[i], cv2.COLOR_BGR2GRAY)
+        
+    
+        flow = cv2.calcOpticalFlowFarneback(
+            prev_gray, gray, None, 
+            pyr_scale=0.5, levels=3, winsize=15, 
+            iterations=3, poly_n=5, poly_sigma=1.2, flags=0
+        )
+        
+        magnitude = np.sqrt(flow[..., 0]**2 + flow[..., 1]**2)
+        flow_magnitudes.append(np.mean(magnitude))
+        prev_gray = gray
+    
+    if len(flow_magnitudes) < 3:
+        return 0.5
+    
+    flow_std = np.std(flow_magnitudes)
+    flow_mean = np.mean(flow_magnitudes)
+    
+    if flow_mean < 0.01:
+        return 0.5
+    
+ 
+    variance_ratio = flow_std / flow_mean
+    
+ 
+    if variance_ratio < 0.25:
+        return 0.75
+    elif variance_ratio > 2.5:
+        return 0.7
+    else:
+        return 0.3
+
+
+def analyze_sharpness_consistency(frames):
+    """Deepfakes often have inconsistent sharpness"""
+    sharpness_values = []
+    
+    for frame in frames[:35]:
+        faces = detect_faces_haar(frame)
+        if not faces:
+            continue
+        
+        crop, _ = faces[0]
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        
+ 
+        laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+        sharpness = laplacian.var()
+        sharpness_values.append(sharpness)
+    
+    if len(sharpness_values) < 5:
+        return 0.5
+    
+    mean_sharp = np.mean(sharpness_values)
+    std_sharp = np.std(sharpness_values)
+    
+    blur_score = 0.0
+    if mean_sharp < 50:
+        blur_score = 0.6
+    
+    if std_sharp > mean_sharp * 0.5:  
+        return max(blur_score, 0.7)
+    
+    return blur_score if blur_score > 0.4 else 0.3
+
+def analyze_frequency_spectrum(frames):
+    """Deepfakes leave artifacts in frequency domain"""
+    high_freq_ratios = []
+    
+    for frame in frames[:25]:
+        faces = detect_faces_haar(frame)
+        if not faces:
+            continue
+        
+        crop, _ = faces[0]
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        
+
+        f = np.fft.fft2(gray)
+        fshift = np.fft.fftshift(f)
+        magnitude = np.abs(fshift)
+        
+
+        h, w = magnitude.shape
+        center_ratio = 0.3
+        cy, cx = h // 2, w // 2
+        
+        center_h = int(h * center_ratio)
+        center_w = int(w * center_ratio)
+        
+        center = magnitude[cy-center_h:cy+center_h, cx-center_w:cx+center_w]
+        total = magnitude
+        
+        center_energy = np.sum(center)
+        total_energy = np.sum(total)
+        
+        if total_energy > 0:
+            high_freq_ratio = 1 - (center_energy / total_energy)
+            high_freq_ratios.append(high_freq_ratio)
+    
+    if len(high_freq_ratios) < 3:
+        return 0.5
+    
+    avg_ratio = np.mean(high_freq_ratios)
+    
+
+    if avg_ratio < 0.4:
+        return 0.7
+    elif avg_ratio > 0.6:
+        return 0.3
+    else:
+        return 0.5
+
+
+def analyze_face_size_stability(frames):
+    """Deepfakes may have unstable face boundaries"""
+    face_sizes = []
+    
+    for frame in frames[:50]:
+        faces = detect_faces_haar(frame)
+        if not faces:
+            continue
+        
+        crop, (x1, y1, x2, y2) = faces[0]
+        size = (x2 - x1) * (y2 - y1)
+        face_sizes.append(size)
+    
+    if len(face_sizes) < 5:
+        return 0.5
+    
+    sizes = np.array(face_sizes)
+    mean_size = np.mean(sizes)
+    std_size = np.std(sizes)
+    
+    if mean_size == 0:
+        return 0.5
+ 
+    cv = std_size / mean_size
+    
+  
+    score = min(1.0, max(0.0, (cv - 0.1) / 0.2))
+    return score
+
+def analyze_histogram_consistency(frames):
+    """Check color histogram stability"""
+    histograms = []
+    
+    for frame in frames[:30]:
+        faces = detect_faces_haar(frame)
+        if not faces:
+            continue
+        
+        crop, _ = faces[0]
+        
+
+        hist_features = []
+        for i in range(3): 
+            hist = cv2.calcHist([crop], [i], None, [32], [0, 256])
+            hist = hist.flatten() / hist.sum()  
+            hist_features.extend(hist.tolist())
+        
+        histograms.append(hist_features)
+    
+    if len(histograms) < 5:
+        return 0.5
+    
+    histograms = np.array(histograms)
+    
+
+    temporal_var = np.mean(np.std(histograms, axis=0))
+    
+   
+    score = min(1.0, temporal_var / 0.08)
+    return score
+
+def aggregate_features(frames, fps):
+    """Combine all features with weighted scoring"""
+    
+    print("Analyzing color stability...", file=sys.stderr)
+    color_score = analyze_color_stability(frames)
+    
+    print("Checking motion consistency...", file=sys.stderr)
+    motion_score = analyze_motion_consistency(frames)
+    
+    print("Evaluating sharpness...", file=sys.stderr)
+    sharpness_score = analyze_sharpness_consistency(frames)
+    
+    print("Analyzing frequency spectrum...", file=sys.stderr)
+    freq_score = analyze_frequency_spectrum(frames)
+    
+    print("Checking face stability...", file=sys.stderr)
+    stability_score = analyze_face_size_stability(frames)
+    
+    print("Analyzing histograms...", file=sys.stderr)
+    hist_score = analyze_histogram_consistency(frames)
+    
+
+    weights = {
+        'color': 0.20,
+        'motion': 0.20,
+        'sharpness': 0.20,
+        'frequency': 0.20,
+        'stability': 0.10,
+        'histogram': 0.10
     }
+    
+    combined_score = (
+        weights['color'] * color_score +
+        weights['motion'] * motion_score +
+        weights['sharpness'] * sharpness_score +
+        weights['frequency'] * freq_score +
+        weights['stability'] * stability_score +
+        weights['histogram'] * hist_score
+    )
+    
+    probability = float(combined_score * 100)
+    
+    details = {
+        "color_stability": float(round(color_score, 3)),
+        "motion_consistency": float(round(motion_score, 3)),
+        "sharpness_quality": float(round(sharpness_score, 3)),
+        "frequency_artifacts": float(round(freq_score, 3)),
+        "face_stability": float(round(stability_score, 3)),
+        "histogram_consistency": float(round(hist_score, 3)),
+        "frames_analyzed": int(len(frames)),
+        "fps": float(round(fps, 2))
+    }
+    
+    return probability, details
 
 def detect(video_path):
+    """Main detection function"""
     if not os.path.exists(video_path):
-        return {"error":"no file"}
-    frames = get_frames(video_path, max_frames=60, resize=(480,320))
-    if len(frames) < 6:
-        return {"error":"video too short"}
-    prob, details = aggregate(frames)
-    is_deepfake = prob > 50
-    return {"type":"video", "isDeepfake": is_deepfake, "confidence": int(prob if is_deepfake else 100-prob), "details": details}
+        return {"error": "File not found"}
+    
+    print(f"Analyzing: {video_path}", file=sys.stderr)
+    
+    frames, fps = get_frames(video_path, max_frames=80)
+    
+    if len(frames) < 5:
+        return {"error": "Video too short (need at least 5 frames)"}
+    
+    probability, details = aggregate_features(frames, fps)
+    
+    is_deepfake = bool(probability > 50)
+    confidence = int(probability if is_deepfake else 100 - probability)
+    
+    return {
+        "type": "video",
+        "isDeepfake": is_deepfake,
+        "confidence": confidence,
+        "details": details,
+        "method": "opencv-only-ensemble"
+    }
 
-if __name__=='__main__':
-    import sys, json
-    path = sys.argv[1]
-    r = detect(path)
-    print(json.dumps(r))
+if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        result = {"error": "No video path provided"}
+        print(json.dumps(result), flush=True)
+        sys.exit(1)
+    
+    video_path = sys.argv[1]
+    
+    try:
+        result = detect(video_path)
+  
+        print(json.dumps(result), flush=True)
+        sys.exit(0)
+    except Exception as e:
+        error_result = {"error": str(e), "traceback": str(e)}
+        print(json.dumps(error_result), flush=True)
+        sys.exit(1)

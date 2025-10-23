@@ -1,4 +1,4 @@
-// backend/server.js
+
 require('dotenv').config();
 
 const express = require('express');
@@ -21,7 +21,6 @@ const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 const upload = multer({ dest: uploadDir, limits: { fileSize: 200 * 1024 * 1024 } });
 
-// Extract claims using LLM
 async function extractClaimsWithLLM(text) {
   const prompt = `Extract 2-4 specific, verifiable factual claims from this text. Return ONLY valid JSON:
 {"claims": ["claim 1", "claim 2", ...]}
@@ -49,7 +48,7 @@ ${text}`;
     console.error('LLM claim extraction failed:', e.message);
   }
   
-  // Fallback to basic extraction
+
   const sentences = text
     .replace(/\n/g, ' ')
     .split(/(?<=[\.\?\!])\s+/)
@@ -59,7 +58,7 @@ ${text}`;
   return sentences.slice(0, 3);
 }
 
-// Build fact-checking prompt
+
 function buildAnalysisPrompt(fullText, claimsAndEvidence) {
   const systemPrompt = `You are a professional fact-checker. Analyze claims based on provided evidence and return STRICT JSON only.
 
@@ -106,7 +105,7 @@ Return JSON format:
   return { systemPrompt, userPrompt };
 }
 
-// MAIN ROUTE: Analyze news
+
 app.post('/api/analyze-news', async (req, res) => {
   try {
     const text = (req.body.text || '').trim();
@@ -114,12 +113,12 @@ app.post('/api/analyze-news', async (req, res) => {
 
     console.log('\n=== Starting Analysis ===');
 
-    // Step 1: Extract claims using LLM
+
     console.log('Extracting claims...');
     const claims = await extractClaimsWithLLM(text);
     console.log('Extracted claims:', claims);
 
-    // Step 2: Retrieve evidence for each claim
+
     console.log('Retrieving evidence...');
     const claimsAndEvidence = [];
     for (const claim of claims) {
@@ -128,7 +127,6 @@ app.post('/api/analyze-news', async (req, res) => {
       claimsAndEvidence.push({ claim, evidence });
     }
 
-    // Step 3: Fact-check with LLM
     console.log('Calling LLM for fact-checking...');
     const { systemPrompt, userPrompt } = buildAnalysisPrompt(text, claimsAndEvidence);
     
@@ -157,7 +155,7 @@ app.post('/api/analyze-news', async (req, res) => {
       });
     }
 
-    // Step 4: AI detection with GPTZero (primary) or fallback
+
     console.log('Detecting AI authorship...');
     let aiDetection;
     try {
@@ -168,7 +166,7 @@ app.post('/api/analyze-news', async (req, res) => {
       aiDetection = await detectAIFallback(text);
     }
 
-    // Step 5: Combine results
+   
     const finalResult = {
       type: 'news',
       claims: factCheckResult.claims || [],
@@ -188,7 +186,7 @@ app.post('/api/analyze-news', async (req, res) => {
   }
 });
 
-// Standalone AI detection endpoint
+
 app.post('/api/detect-ai', async (req, res) => {
   try {
     const text = (req.body.text || '').trim();
@@ -208,41 +206,112 @@ app.post('/api/detect-ai', async (req, res) => {
   }
 });
 
-// Video analysis (unchanged)
+
+
+
 app.post('/api/analyze-video', upload.single('video'), async (req, res) => {
+  let videoPath = null;
+  
   try {
-    if (!req.file) return res.status(400).json({ error: 'No file' });
-    const videoPath = req.file.path;
+    if (!req.file) {
+      return res.status(400).json({ error: 'No video file uploaded' });
+    }
+    
+    videoPath = req.file.path;
+    console.log('Video uploaded:', videoPath);
 
     const pyPath = path.join(__dirname, 'ai_models', 'deepfake_detector.py');
+    
     if (!fs.existsSync(pyPath)) {
-      try { fs.unlinkSync(videoPath); } catch (e) {}
-      return res.status(501).json({ error: 'Deepfake detector not available' });
+      console.error('Python script not found:', pyPath);
+      if (videoPath) {
+        try { fs.unlinkSync(videoPath); } catch (e) {}
+      }
+      return res.status(501).json({ 
+        error: 'Deepfake detector not available',
+        path: pyPath 
+      });
     }
 
+    console.log('Running Python detector...');
+    
     const { spawn } = require('child_process');
-    const py = spawn('python3', [pyPath, videoPath], { stdio: ['ignore', 'pipe', 'pipe'] });
-    let out = '', err = '';
+    const py = spawn('python3', [pyPath, videoPath], { 
+      stdio: ['ignore', 'pipe', 'pipe'] 
+    });
+    
+    let stdout = '';
+    let stderr = '';
 
-    py.stdout.on('data', (d) => { out += d.toString(); });
-    py.stderr.on('data', (d) => { err += d.toString(); });
+    py.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    py.stderr.on('data', (data) => {
+      stderr += data.toString();
+      console.log('Python stderr:', data.toString());
+    });
+
+    py.on('error', (error) => {
+      console.error('Failed to start Python process:', error);
+      if (videoPath) {
+        try { fs.unlinkSync(videoPath); } catch (e) {}
+      }
+      return res.status(502).json({ 
+        error: 'Failed to start deepfake detector',
+        details: error.message 
+      });
+    });
 
     py.on('close', (code) => {
-      try { fs.unlinkSync(videoPath); } catch (e) {}
-      if (code !== 0) {
-        console.error('Python error:', err);
-        return res.status(502).json({ error: 'Deepfake analysis failed', details: err });
+     
+      if (videoPath) {
+        try { 
+          fs.unlinkSync(videoPath); 
+          console.log('Video file deleted');
+        } catch (e) {
+          console.error('Failed to delete video:', e.message);
+        }
       }
+
+      console.log('Python process exited with code:', code);
+      console.log('Python stdout:', stdout);
+      
+      if (code !== 0) {
+        console.error('Python error (code ' + code + '):', stderr);
+        return res.status(502).json({ 
+          error: 'Deepfake analysis failed',
+          exitCode: code,
+          details: stderr,
+          stdout: stdout
+        });
+      }
+
       try {
-        const result = JSON.parse(out);
+        const result = JSON.parse(stdout.trim());
+        console.log('Analysis result:', result);
         return res.json(result);
-      } catch (e) {
-        return res.status(502).json({ error: 'Invalid python output', raw: out });
+      } catch (parseError) {
+        console.error('Failed to parse Python output:', parseError.message);
+        console.error('Raw stdout:', stdout);
+        return res.status(502).json({ 
+          error: 'Invalid JSON from deepfake detector',
+          details: parseError.message,
+          raw: stdout,
+          stderr: stderr
+        });
       }
     });
+
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'server error' });
+    console.error('Video analysis error:', err);
+    if (videoPath) {
+      try { fs.unlinkSync(videoPath); } catch (e) {}
+    }
+    return res.status(500).json({ 
+      error: 'Server error',
+      details: err.message 
+    });
   }
 });
 
