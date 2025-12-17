@@ -23,7 +23,7 @@ const upload = multer({ dest: uploadDir, limits: { fileSize: 200 * 1024 * 1024 }
 
 
 async function extractClaimsWithLLM(text) {
-  // quick guard
+  
   text = (text || '').trim();
   if (!text || text.length < 20) {
     console.log('[ClaimsExtractor] input too short for LLM, using tiny fallback');
@@ -54,7 +54,7 @@ ${text}`;
 
     const parsed = extractJsonFromText(response);
     if (parsed && Array.isArray(parsed.claims) && parsed.claims.length) {
-      // normalize and trim
+      
       const cleaned = parsed.claims
         .map(c => (c || '').replace(/\s+/g, ' ').trim())
         .filter(Boolean)
