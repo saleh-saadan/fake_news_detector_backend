@@ -297,14 +297,14 @@ async function retrieveEvidence(claim) {
   
   let results = [];
   
-  // Priority 1: Serper (best free option - 2500/month)
+ 
   results = await serperSearch(q, 10);
   if (results.length >= 3) {
     console.log(`[Retriever] ✅ Using ${results.length} results from Serper\n`);
     return results;
   }
   
-  // Priority 2: Tavily (designed for AI - 1000/month)
+ 
   results = await tavilySearch(q, 10);
   if (results.length >= 3) {
     console.log(`[Retriever] ✅ Using ${results.length} results from Tavily\n`);

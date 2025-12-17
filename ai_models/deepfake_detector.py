@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 
 def get_frames(video_path, max_frames=80):
-    """Extract frames evenly from video"""
+
     cap = cv2.VideoCapture(video_path)
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -25,7 +25,7 @@ def get_frames(video_path, max_frames=80):
     return frames, fps
 
 def detect_faces_haar(frame):
-    """Detect faces using OpenCV's Haar Cascade (built-in)"""
+   
     face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     faces = face_cascade.detectMultiScale(gray, 1.1, 4)
@@ -49,7 +49,7 @@ def detect_faces_haar(frame):
 
 
 def analyze_color_stability(frames):
-    """Check if face colors remain consistent over time"""
+    
     color_features = []
     
     for frame in frames[:40]:
@@ -78,7 +78,7 @@ def analyze_color_stability(frames):
 
 
 def analyze_motion_consistency(frames):
-    """Detect unnatural motion patterns"""
+    
     if len(frames) < 6:
         return 0.5
     
@@ -121,7 +121,7 @@ def analyze_motion_consistency(frames):
 
 
 def analyze_sharpness_consistency(frames):
-    """Deepfakes often have inconsistent sharpness"""
+    
     sharpness_values = []
     
     for frame in frames[:35]:
@@ -153,7 +153,7 @@ def analyze_sharpness_consistency(frames):
     return blur_score if blur_score > 0.4 else 0.3
 
 def analyze_frequency_spectrum(frames):
-    """Deepfakes leave artifacts in frequency domain"""
+
     high_freq_ratios = []
     
     for frame in frames[:25]:
@@ -202,7 +202,7 @@ def analyze_frequency_spectrum(frames):
 
 
 def analyze_face_size_stability(frames):
-    """Deepfakes may have unstable face boundaries"""
+    
     face_sizes = []
     
     for frame in frames[:50]:
@@ -231,7 +231,7 @@ def analyze_face_size_stability(frames):
     return score
 
 def analyze_histogram_consistency(frames):
-    """Check color histogram stability"""
+    
     histograms = []
     
     for frame in frames[:30]:
@@ -263,7 +263,7 @@ def analyze_histogram_consistency(frames):
     return score
 
 def aggregate_features(frames, fps):
-    """Combine all features with weighted scoring"""
+    
     
     print("Analyzing color stability...", file=sys.stderr)
     color_score = analyze_color_stability(frames)
@@ -318,7 +318,7 @@ def aggregate_features(frames, fps):
     return probability, details
 
 def detect(video_path):
-    """Main detection function"""
+    
     if not os.path.exists(video_path):
         return {"error": "File not found"}
     

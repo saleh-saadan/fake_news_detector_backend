@@ -1,26 +1,12 @@
-// backend/ai-detector-chatgpt.js
-// ChatGPT-based AI detector (improved prompt + parsing)
-// Exports: detectWithLLM(text) and detectAIFallback(text)
-// Depends on: ./llm.js -> { callOpenRouterChat, extractJsonFromText }
+
+
+
+
 
 const { callOpenRouterChat, extractJsonFromText } = require('./llm');
 
 const MAX_TOKENS = 700;
 
-/**
- * Strict JSON shape the LLM must return:
- * {
- *   "score": <0-100>,
- *   "verdict": "AI" | "HUMAN" | "UNCERTAIN",
- *   "explanation": "<short reasoning sentence>",
- *   "aiSignals": ["signal1", "signal2"],
- *   "humanSignals": ["signal1", "signal2"],
- *   "advice": "<how to interpret/use this>"
- * }
- *
- * The prompt below forces decisiveness, gives examples, asks for concrete signals,
- * and instructs the model to never reveal chain-of-thought — only the JSON output.
- */
 const PROMPT = `
 You are a decisive forensic analyst who detects whether a piece of text was likely written by a large language model.
 Return ONLY valid JSON with the exact keys: score, verdict, explanation, aiSignals, humanSignals, advice.
@@ -54,10 +40,6 @@ TEXT:
 <<<TEXT_TO_ANALYZE>>>
 `;
 
-/**
- * Calls the LLM with the hard prompt, substituting the text.
- * Tries to parse JSON strictly. If parsing fails or response looks bad, returns null.
- */
 async function callDetectorLLM(text) {
   const userPrompt = PROMPT.replace('<<<TEXT_TO_ANALYZE>>>', text.slice(0, 3600));
   const messages = [
@@ -70,10 +52,7 @@ async function callDetectorLLM(text) {
   return { raw, parsed };
 }
 
-/**
- * Simple heuristic fallback used if LLM fails to return valid JSON.
- * Keeps the system conservative (bias toward human unless multiple AI signals).
- */
+
 function heuristicDetector(text) {
   const out = {
     isAIWritten: false,
@@ -91,7 +70,7 @@ function heuristicDetector(text) {
 
   const lc = text.toLowerCase();
 
-  // signals
+  
   const aiPhrases = ['furthermore', 'moreover', 'delve into', 'it is important to note', 'leverage', 'utilize', 'in conclusion'];
   const foundAi = aiPhrases.filter(p => lc.includes(p));
   if (foundAi.length) {
@@ -111,7 +90,7 @@ function heuristicDetector(text) {
     out.aiConfidence -= Math.min(30, typos * 10);
   }
 
-  // repetitiveness heuristic
+  
   const sentences = text.split(/[.!?]+/).map(s => s.trim()).filter(Boolean);
   if (sentences.length >= 6) {
     const starts = sentences.map(s => s.split(/\s+/)[0]?.toLowerCase() || '');
@@ -123,7 +102,7 @@ function heuristicDetector(text) {
     }
   }
 
-  // perfect grammar heuristic
+  
   const hasObviousErrors = typos > 0 || /\s{2,}/.test(text);
   if (!hasObviousErrors && text.length > 200) {
     out.keyIndicators.push('long-clean-text');
@@ -136,15 +115,11 @@ function heuristicDetector(text) {
   return out;
 }
 
-/**
- * Public function: use improved ChatGPT prompt to detect AI.
- * Returns unified object: { isAIWritten, aiConfidence, aiExplanation, keyIndicators, method }
- */
+
 async function detectWithLLM(text) {
   try {
     const { raw, parsed } = await callDetectorLLM(text);
 
-    // If JSON parsed and contains score & verdict, normalize and return
     if (parsed && typeof parsed.score === 'number' && parsed.verdict) {
       const score = Math.max(0, Math.min(100, Math.round(parsed.score)));
       const verdict = parsed.verdict === 'AI' ? 'AI' : (parsed.verdict === 'HUMAN' ? 'HUMAN' : 'UNCERTAIN');
@@ -163,14 +138,12 @@ async function detectWithLLM(text) {
       };
     }
 
-    // If parsed is null or malformed, fallback to heuristic
     return {
       ...heuristicDetector(text),
       method: 'llm-chatgpt-prompt-fallback',
       rawLLMResponse: raw ? String(raw).slice(0, 800) : undefined
     };
   } catch (e) {
-    // On error, return heuristic fallback
     return {
       ...heuristicDetector(text),
       method: 'llm-chatgpt-prompt-error',
@@ -179,13 +152,9 @@ async function detectWithLLM(text) {
   }
 }
 
-/**
- * Compatibility wrapper to match your server imports:
- * detectAIWithGPTZero (not implemented here) -> throw to force fallback
- * detectAIFallback -> calls detectWithLLM
- */
+
 async function detectAIWithGPTZero(text) {
-  // purposely throw so server can fall back to this module when ZeroGPT unavailable
+  
   throw new Error('ZeroGPT not available in this module. Call detectAIFallback instead.');
 }
 
